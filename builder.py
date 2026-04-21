@@ -1,46 +1,59 @@
 import base64
+import urllib.request
+import os
 
-# The ISO file you downloaded
+print("1. Downloading emulator files...")
+urllib.request.urlretrieve("https://copy.sh/v86/build/libv86.js", "libv86.js")
+urllib.request.urlretrieve("https://copy.sh/v86/build/v86.wasm", "v86.wasm")
+urllib.request.urlretrieve("https://copy.sh/v86/bios/seabios.bin", "seabios.bin")
+
+# We assume you still have the Alpine ISO in the Codespace from earlier
 iso_file = "alpine-virt-3.18.4-x86.iso"
 
-html_part1 = """<!DOCTYPE html>
+print("2. Converting binary files to Base64 (this takes a few seconds)...")
+def get_b64(filename):
+    with open(filename, "rb") as f:
+        return base64.b64encode(f.read()).decode('utf-8')
+
+wasm_b64 = get_b64("v86.wasm")
+bios_b64 = get_b64("seabios.bin")
+iso_b64 = get_b64(iso_file)
+
+print("3. Reading JavaScript driver...")
+with open("libv86.js", "r", encoding="utf-8") as f:
+    js_code = f.read()
+
+print("4. Stitching the Ultimate HTML file...")
+# Notice how ALL external URLs have been replaced with Base64 data variables
+html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>Alpine Linux Offline</title>
+    <title>Ultimate Offline VM</title>
     <style>
-        body { margin: 0; background: #000; color: #0f0; font-family: monospace; overflow: hidden; }
-        #screen { width: 100vw; height: 100vh; }
+        body {{ margin: 0; background: #000; color: #0f0; font-family: monospace; overflow: hidden; }}
+        #screen {{ width: 100vw; height: 100vh; }}
     </style>
 </head>
 <body>
-    <div id="screen">Loading Alpine Linux...</div>
-    <script src="https://copy.sh/v86/build/libv86.js"></script>
+    <div id="screen">Booting True Offline VM...</div>
+    
+    <script>{js_code}</script>
+    
     <script>
-        const ISO_DATA = \""""
-
-html_part2 = """\";
-        const emulator = new V86Starter({
-            wasm_path: "https://copy.sh/v86/build/v86.wasm",
+        const emulator = new V86Starter({{
+            wasm_path: "data:application/wasm;base64,{wasm_b64}",
             memory_size: 256 * 1024 * 1024,
             vga_canvas: document.createElement("canvas"),
             term_container: document.getElementById("screen"),
-            bios: { url: "https://copy.sh/v86/bios/seabios.bin" },
-            cdrom: { url: "data:application/octet-stream;base64," + ISO_DATA },
+            bios: {{ url: "data:application/octet-stream;base64,{bios_b64}" }},
+            cdrom: {{ url: "data:application/octet-stream;base64,{iso_b64}" }},
             autostart: true,
-        });
+        }});
     </script>
 </body>
 </html>"""
 
-print("Reading ISO and converting to Base64 (this takes about 5 seconds)...")
-with open(iso_file, "rb") as f:
-    # This reads the binary and safely formats it as a single line of text
-    b64_string = base64.b64encode(f.read()).decode('utf-8')
+with open("True-Offline-OS.html", "w", encoding="utf-8") as f:
+    f.write(html)
 
-print("Stitching the HTML file together...")
-with open("AlpineOS-Offline.html", "w") as f:
-    f.write(html_part1)
-    f.write(b64_string)
-    f.write(html_part2)
-
-print("Success! Your single-file OS is ready to download.")
+print("Success! Your completely offline OS is ready.")
