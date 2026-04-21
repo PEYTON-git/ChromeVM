@@ -11,10 +11,14 @@ wasm_b64 = get_b64("v86.wasm")
 bios_b64 = get_b64("seabios.bin")
 iso_b64 = get_b64("alpine-virt-3.18.4-x86.iso")
 
-# NEW FIX: We are now encoding the JavaScript engine itself!
-js_b64 = get_b64("libv86.js")
+print("2. Reading the JS engine...")
+with open("libv86.js", "r", encoding="utf-8") as f:
+    js_code = f.read()
 
-print("2. Assembling the Ultimate Frankenstein HTML...")
+# THE MAGIC FIX: Escaping the rogue HTML tags inside the JavaScript file
+js_code = js_code.replace("</script>", "<\\/script>")
+
+print("3. Assembling the Ultimate Frankenstein HTML...")
 html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -33,11 +37,15 @@ html = f"""<!DOCTYPE html>
     <script type="text/plain" id="data-bios">{bios_b64}</script>
     <script type="text/plain" id="data-iso">{iso_b64}</script>
     
-    <script src="data:application/javascript;base64,{js_b64}"></script>
+    <script>{js_code}</script>
     
     <script>
         setTimeout(() => {{
             try {{
+                if (typeof V86Starter === 'undefined') {{
+                    throw new Error("V86Starter still blocked. Chrome is restricting local execution.");
+                }}
+
                 document.getElementById("status").innerText = "Step 2: Loading data into memory...";
                 
                 const wasm_str = document.getElementById("data-wasm").textContent;
@@ -63,7 +71,7 @@ html = f"""<!DOCTYPE html>
             }} catch (error) {{
                 document.getElementById("status").innerText = "CRASH: " + error.message;
             }}
-        }}, 1500); // 1.5 second breather for the browser
+        }}, 1500);
     </script>
 </body>
 </html>"""
