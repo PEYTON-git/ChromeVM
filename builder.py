@@ -11,13 +11,10 @@ wasm_b64 = get_b64("v86.wasm")
 bios_b64 = get_b64("seabios.bin")
 iso_b64 = get_b64("alpine-virt-3.18.4-x86.iso")
 
-print("2. Reading the JS engine...")
-with open("libv86.js", "r", encoding="utf-8") as f:
-    js_code = f.read()
+# NEW FIX: We are now encoding the JavaScript engine itself!
+js_b64 = get_b64("libv86.js")
 
-print("3. Assembling the Frankenstein HTML...")
-# Notice how the data is inside <script type="text/plain"> tags. 
-# The browser treats this as raw, dumb text and won't crash trying to "execute" it!
+print("2. Assembling the Ultimate Frankenstein HTML...")
 html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -25,7 +22,7 @@ html = f"""<!DOCTYPE html>
     <style>
         body {{ margin: 0; background: #111; color: #0f0; font-family: monospace; overflow: hidden; }}
         #terminal {{ width: 100vw; height: 100vh; }}
-        #status {{ position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 5px; }}
+        #status {{ position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 5px; z-index: 999; }}
     </style>
 </head>
 <body>
@@ -36,14 +33,13 @@ html = f"""<!DOCTYPE html>
     <script type="text/plain" id="data-bios">{bios_b64}</script>
     <script type="text/plain" id="data-iso">{iso_b64}</script>
     
-    <script>{js_code}</script>
+    <script src="data:application/javascript;base64,{js_b64}"></script>
     
     <script>
         setTimeout(() => {{
             try {{
                 document.getElementById("status").innerText = "Step 2: Loading data into memory...";
                 
-                // Pulling from the DOM instead of giant JS variables
                 const wasm_str = document.getElementById("data-wasm").textContent;
                 const bios_str = document.getElementById("data-bios").textContent;
                 const iso_str = document.getElementById("data-iso").textContent;
@@ -67,7 +63,7 @@ html = f"""<!DOCTYPE html>
             }} catch (error) {{
                 document.getElementById("status").innerText = "CRASH: " + error.message;
             }}
-        }}, 1000); // Give the browser 1 second to breathe before starting
+        }}, 1500); // 1.5 second breather for the browser
     </script>
 </body>
 </html>"""
