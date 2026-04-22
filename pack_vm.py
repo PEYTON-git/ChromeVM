@@ -1,105 +1,124 @@
 import base64
 import os
-import sys
 import urllib.request
 
-V86_FILES = {
+# --- Configuration ---
+FILES = {
     "libv86.js": "https://unpkg.com/v86/build/libv86.js",
     "v86.wasm": "https://unpkg.com/v86/build/v86.wasm",
     "seabios.bin": "https://raw.githubusercontent.com/copy/v86/master/bios/seabios.bin",
-    "vgabios.bin": "https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin"
+    "vgabios.bin": "https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin",
+    "linux4.iso": "https://copy.sh/v86/images/linux4.iso"
 }
 
-ISO_MIRRORS = [
-    "https://i.copy.sh/linux4.iso",
-    "https://copy.sh/v86/images/linux4.iso"
-]
+def fetch_dependencies():
+    for filename, url in FILES.items():
+        if not os.path.exists(filename):
+            print(f"[*] Downloading {filename}...")
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
+                    out_file.write(response.read())
+            except Exception as e:
+                print(f"[!] Failed to download {filename}: {e}")
 
-def download_file(url, filename):
-    if os.path.exists(filename): return
-    print(f"[*] Downloading {filename}...")
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
-            out_file.write(response.read())
-    except Exception as e: pass
-
-def download_with_fallback(mirrors, filename):
-    if os.path.exists(filename): return
-    print(f"[*] Downloading {filename}...")
-    for url in mirrors:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
-                out_file.write(response.read())
-            return
-        except: continue
-
-def encode_raw_base64(filepath):
-    print(f"[*] Encoding {filepath}...")
+def get_b64(filepath):
+    print(f"[*] Encoding {filepath} to Base64...")
     with open(filepath, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
 def main():
-    print("--- Pulling Dependencies ---")
-    for filename, url in V86_FILES.items(): download_file(url, filename)
-    download_with_fallback(ISO_MIRRORS, "linux4.iso")
-    print("----------------------------\n")
+    print("--- Verifying Dependencies ---")
+    fetch_dependencies()
+    print("------------------------------\n")
 
+    print("[*] Packaging components...")
+    
+    # Inject JS as raw text to bypass Data URI length limitations.
+    # Escaping script tags prevents the HTML from breaking prematurely.
     with open("libv86.js", "r", encoding="utf-8") as f:
-        # CRITICAL FIX: Prevent premature script closure inside the HTML template
         v86_js = f.read().replace("</script>", "<\\/script>")
 
-    wasm_b64 = encode_raw_base64("v86.wasm")
-    bios_b64 = encode_raw_base64("seabios.bin")
-    vgabios_b64 = encode_raw_base64("vgabios.bin")
-    iso_b64 = encode_raw_base64("linux4.iso")
+    wasm_b64 = get_b64("v86.wasm")
+    bios_b64 = get_b64("seabios.bin")
+    vga_b64 = get_b64("vgabios.bin")
+    iso_b64 = get_b64("linux4.iso")
 
     html_template = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Offline Linux VM</title>
+    <title>Linux VM (Refined)</title>
     <style>
-        body {{ background-color: #111; color: #eee; margin: 0; padding: 20px; display: flex; justify-content: center; }}
-        #screen_container {{ background-color: #000; border: 2px solid #444; padding: 5px; min-width: 640px; min-height: 400px; }}
+        body {{ background: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem; margin: 0; }}
+        .container {{ background: #1e293b; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 800px; width: 100%; }}
+        #screen_container {{ background: #000; border: 2px solid #334155; border-radius: 0.25rem; min-width: 640px; min-height: 400px; display: flex; justify-content: center; align-items: center; overflow: hidden; margin-top: 1rem; position: relative; }}
+        #log {{ font-family: monospace; color: #38bdf8; margin-bottom: 1rem; padding: 0.75rem; background: #020617; border-radius: 0.25rem; white-space: pre-wrap; }}
+        .error {{ color: #ef4444 !important; font-weight: bold; }}
+        .success {{ color: #22c55e !important; }}
     </style>
-    <script>
-        // --- v86 Engine ---
-        {v86_js}
-    </script>
 </head>
 <body>
-    <div id="screen_container">
-        <div style="white-space: pre; font: 14px monospace; line-height: 14px; padding: 5px;">Booting VM... Please wait up to 10 seconds.</div>
-        <canvas style="display: none"></canvas>
+    <div class="container">
+        <h2 style="margin-top:0;">Offline Linux Environment</h2>
+        <div id="log">Initializing diagnostics...</div>
+        <div id="screen_container">
+            <div style="white-space: pre; font: 14px monospace; line-height: 14px; position: absolute; top: 5px; left: 5px;"></div>
+            <canvas style="display:none"></canvas>
+        </div>
     </div>
 
     <script>
-        // Use browser's native C++ engine to decode Base64 instantly without locking the thread
-        async function loadDataUriToBuffer(b64, mime) {{
-            const dataUri = `data:${{mime}};base64,${{b64}}`;
-            const res = await fetch(dataUri);
-            return await res.arrayBuffer();
+        {v86_js}
+    </script>
+
+    <script>
+        const logEl = document.getElementById('log');
+        const log = (msg, type = '') => {{
+            logEl.innerHTML += `<br><span class="${{type}}">> ${{msg}}</span>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }};
+
+        // Efficient, sequential Base64 to ArrayBuffer decoder (Memory Safe)
+        function decodeBase64(b64) {{
+            const binString = window.atob(b64);
+            const len = binString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {{
+                bytes[i] = binString.charCodeAt(i);
+            }}
+            return bytes.buffer;
         }}
 
-        window.onload = async function() {{
+        async function initVM() {{
             try {{
-                // Decode all files concurrently into raw memory
-                const [wasmBuf, biosBuf, vgaBuf, isoBuf] = await Promise.all([
-                    loadDataUriToBuffer("{wasm_b64}", "application/wasm"),
-                    loadDataUriToBuffer("{bios_b64}", "application/octet-stream"),
-                    loadDataUriToBuffer("{vgabios_b64}", "application/octet-stream"),
-                    loadDataUriToBuffer("{iso_b64}", "application/octet-stream")
-                ]);
+                log("Checking environment compatibility...");
+                if (typeof V86Starter === 'undefined') {{
+                    throw new Error("v86 engine failed to load. The browser dropped the script.");
+                }}
+                if (typeof WebAssembly === 'undefined') {{
+                    throw new Error("WebAssembly is completely disabled on this device.");
+                }}
 
-                document.querySelector("#screen_container div").innerText = ""; // Clear loading text
+                log("Decoding WebAssembly engine...");
+                const wasmBuf = decodeBase64("{wasm_b64}");
+                
+                log("Decoding BIOS and OS Disks (this may take a few seconds)...");
+                const biosBuf = decodeBase64("{bios_b64}");
+                const vgaBuf = decodeBase64("{vga_b64}");
+                const isoBuf = decodeBase64("{iso_b64}");
 
-                var emulator = new V86Starter({{
-                    // Bypass internal fetch blocks by compiling the WebAssembly manually
-                    wasm_fn: async function(param) {{
-                        const compiled = await WebAssembly.instantiate(wasmBuf, param);
-                        return compiled.instance.exports;
+                log("Booting Virtual Machine...", "success");
+                
+                const emulator = new V86Starter({{
+                    wasm_fn: async (imports) => {{
+                        try {{
+                            const {{ instance }} = await WebAssembly.instantiate(wasmBuf, imports);
+                            return instance.exports;
+                        }} catch (e) {{
+                            log("WASM Compilation blocked! Your Chromebook's security policy likely blocks 'unsafe-wasm-eval' for local files.", "error");
+                            throw e;
+                        }}
                     }},
                     memory_size: 128 * 1024 * 1024,
                     vga_memory_size: 8 * 1024 * 1024,
@@ -109,21 +128,24 @@ def main():
                     cdrom: {{ buffer: isoBuf }},
                     autostart: true
                 }});
+
             }} catch (err) {{
-                // If Chrome OS blocks something, print it visibly to the screen
-                document.querySelector("#screen_container div").innerHTML = 
-                    `<span style="color:red; font-size:16px;">CRASH ERROR: ${{err.message}}</span>`;
+                log("FATAL ERROR: " + err.message, "error");
             }}
-        }};
+        }}
+
+        // Start after a tiny delay to allow the HTML/CSS to render first
+        setTimeout(initVM, 150);
     </script>
 </body>
 </html>
 """
-    output = "linux_offline_final.html"
-    print(f"\n[*] Writing to {output}...")
+    
+    output = "linux_refined.html"
+    print(f"\n[*] Writing everything to {output}...")
     with open(output, "w", encoding="utf-8") as f:
         f.write(html_template)
-    print(f"[OK] Done! Open {output} from your Downloads folder.")
+    print(f"[OK] Done! Move {output} to your local Downloads folder and run it.")
 
 if __name__ == "__main__":
     main()
