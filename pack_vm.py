@@ -12,80 +12,60 @@ V86_FILES = {
     "vgabios.bin": "https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin"
 }
 
-# Multiple mirrors for the minimal Linux ISO to prevent DNS/Download errors
 ISO_MIRRORS = [
     "https://i.copy.sh/linux4.iso",
     "https://copy.sh/v86/images/linux4.iso"
 ]
 
 def download_file(url, filename):
-    """Standard downloader for single URLs."""
     if os.path.exists(filename):
-        print(f"[OK] {filename} already exists. Skipping download.")
         return
-
     print(f"[*] Downloading {filename}...")
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    
     try:
         with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
             out_file.write(response.read())
-        print(f"[OK] Successfully downloaded {filename}.")
     except urllib.error.URLError as e:
         print(f"[!] Failed to download {filename}: {e}")
         sys.exit(1)
 
 def download_with_fallback(mirrors, filename):
-    """Downloader that tries multiple URLs if one fails."""
     if os.path.exists(filename):
-        print(f"[OK] {filename} already exists. Skipping download.")
         return
-
     print(f"[*] Downloading {filename}...")
     for url in mirrors:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         try:
             with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
                 out_file.write(response.read())
-            print(f"[OK] Successfully downloaded {filename} from {url}.")
-            return # Success, exit the loop
-        except urllib.error.URLError as e:
-            print(f"    [-] Mirror failed ({url}): {e}")
-            continue # Try the next URL in the list
-    
-    # If the loop finishes without returning, all mirrors failed
+            return
+        except urllib.error.URLError:
+            continue
     print(f"[!] Critical Error: All mirrors failed for {filename}.")
     sys.exit(1)
 
-def encode_file_to_data_uri(filepath, mime_type="application/octet-stream"):
-    """Reads a binary file and returns a Base64 data URI."""
-    print(f"[*] Encoding {filepath} to Base64 (This might take a moment)...")
+def encode_file_to_raw_base64(filepath):
+    """Returns JUST the Base64 string, no data URI wrapper."""
+    print(f"[*] Encoding {filepath} to Base64...")
     with open(filepath, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:{mime_type};base64,{encoded}"
+        return base64.b64encode(f.read()).decode("utf-8")
 
 def main():
     print("--- Checking and Pulling Dependencies ---")
-    
-    # 1. Pull core engine and BIOS files
     for filename, url in V86_FILES.items():
         download_file(url, filename)
-        
-    # 2. Pull the ISO using the robust mirror setup
     download_with_fallback(ISO_MIRRORS, "linux4.iso")
     print("-----------------------------------------\n")
 
-    # 3. Read libv86.js as plain text
     with open("libv86.js", "r", encoding="utf-8") as f:
         v86_js_content = f.read()
 
-    # 4. Encode binaries to Base64 Data URIs
-    wasm_uri = encode_file_to_data_uri("v86.wasm", "application/wasm")
-    bios_uri = encode_file_to_data_uri("seabios.bin")
-    vgabios_uri = encode_file_to_data_uri("vgabios.bin")
-    iso_uri = encode_file_to_data_uri("linux4.iso")
+    # Get raw base64 instead of Data URIs
+    wasm_b64 = encode_file_to_raw_base64("v86.wasm")
+    bios_b64 = encode_file_to_raw_base64("seabios.bin")
+    vgabios_b64 = encode_file_to_raw_base64("vgabios.bin")
+    iso_b64 = encode_file_to_raw_base64("linux4.iso")
 
-    # 5. The HTML Template
     html_template = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -94,7 +74,7 @@ def main():
     <title>Offline Linux VM</title>
     <style>
         body {{ background-color: #111; color: #eee; margin: 0; padding: 20px; font-family: sans-serif; display: flex; justify-content: center; }}
-        #screen_container {{ background-color: #000; border: 2px solid #444; padding: 5px; }}
+        #screen_container {{ background-color: #000; border: 2px solid #444; padding: 5px; min-width: 640px; min-height: 400px; }}
     </style>
     <script>
         // --- v86 Engine ---
@@ -108,15 +88,32 @@ def main():
     </div>
 
     <script>
+        // Memory-safe Base64 to Blob URL converter
+        function b64ToBlobUrl(b64, mimeType) {{
+            const binary = window.atob(b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {{
+                bytes[i] = binary.charCodeAt(i);
+            }}
+            const blob = new Blob([bytes.buffer], {{ type: mimeType }});
+            return URL.createObjectURL(blob);
+        }}
+
         window.onload = function() {{
+            // Convert Base64 strings to fake files in RAM
+            const wasmUrl = b64ToBlobUrl("{wasm_b64}", "application/wasm");
+            const biosUrl = b64ToBlobUrl("{bios_b64}", "application/octet-stream");
+            const vgaUrl = b64ToBlobUrl("{vgabios_b64}", "application/octet-stream");
+            const isoUrl = b64ToBlobUrl("{iso_b64}", "application/octet-stream");
+
             var emulator = new V86Starter({{
-                wasm_path: "{wasm_uri}",
-                memory_size: 128 * 1024 * 1024, // 128 MB RAM for minimal Linux
+                wasm_path: wasmUrl,
+                memory_size: 128 * 1024 * 1024,
                 vga_memory_size: 8 * 1024 * 1024,
                 screen_container: document.getElementById("screen_container"),
-                bios: {{ url: "{bios_uri}" }},
-                vga_bios: {{ url: "{vgabios_uri}" }},
-                cdrom: {{ url: "{iso_uri}", async: false }}, 
+                bios: {{ url: biosUrl }},
+                vga_bios: {{ url: vgaUrl }},
+                cdrom: {{ url: isoUrl, async: true }},
                 autostart: true
             }});
         }};
@@ -125,14 +122,12 @@ def main():
 </html>
 """
 
-    # 6. Write the final single-file HTML
-    output_filename = "linux_offline.html"
+    output_filename = "linux_offline_fixed.html"
     print(f"\n[*] Writing everything to {output_filename}...")
     with open(output_filename, "w", encoding="utf-8") as f:
         f.write(html_template)
         
-    print(f"[OK] Done! The script finished successfully.")
-    print(f"[OK] You can now open {output_filename} in your browser.")
+    print(f"[OK] Done! Open {output_filename} from your standard Downloads folder.")
 
 if __name__ == "__main__":
     main()
