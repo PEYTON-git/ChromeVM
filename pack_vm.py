@@ -20,7 +20,7 @@ def fetch_dependencies():
                 with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
                     out_file.write(response.read())
             except Exception as e:
-                print(f"[!] Failed to download {filename}: {e}")
+                pass
 
 def get_b64(filepath):
     print(f"[*] Encoding {filepath} to Base64...")
@@ -34,11 +34,8 @@ def main():
 
     print("[*] Packaging components...")
     
-    # Inject JS as raw text to bypass Data URI length limitations.
-    # Escaping script tags prevents the HTML from breaking prematurely.
-    with open("libv86.js", "r", encoding="utf-8") as f:
-        v86_js = f.read().replace("</script>", "<\\/script>")
-
+    # Encode EVERYTHING, including the JS engine, to avoid HTML parser conflicts
+    engine_b64 = get_b64("libv86.js")
     wasm_b64 = get_b64("v86.wasm")
     bios_b64 = get_b64("seabios.bin")
     vga_b64 = get_b64("vgabios.bin")
@@ -48,7 +45,7 @@ def main():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Refined)</title>
+    <title>Linux VM (Ghost Injection)</title>
     <style>
         body {{ background: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem; margin: 0; }}
         .container {{ background: #1e293b; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 800px; width: 100%; }}
@@ -69,17 +66,12 @@ def main():
     </div>
 
     <script>
-        {v86_js}
-    </script>
-
-    <script>
         const logEl = document.getElementById('log');
         const log = (msg, type = '') => {{
             logEl.innerHTML += `<br><span class="${{type}}">> ${{msg}}</span>`;
             logEl.scrollTop = logEl.scrollHeight;
         }};
 
-        // Efficient, sequential Base64 to ArrayBuffer decoder (Memory Safe)
         function decodeBase64(b64) {{
             const binString = window.atob(b64);
             const len = binString.length;
@@ -92,15 +84,23 @@ def main():
 
         async function initVM() {{
             try {{
-                log("Checking environment compatibility...");
-                if (typeof V86Starter === 'undefined') {{
-                    throw new Error("v86 engine failed to load. The browser dropped the script.");
-                }}
-                if (typeof WebAssembly === 'undefined') {{
-                    throw new Error("WebAssembly is completely disabled on this device.");
-                }}
+                log("Unpacking JavaScript Engine...");
+                
+                // Decode the engine Base64 into raw text to bypass the HTML parser
+                const engineBytes = new Uint8Array(decodeBase64("{engine_b64}"));
+                const engineCode = new TextDecoder('utf-8').decode(engineBytes);
+                
+                // Inject directly into the DOM
+                const script = document.createElement('script');
+                script.text = engineCode;
+                document.body.appendChild(script);
 
-                log("Decoding WebAssembly engine...");
+                if (typeof V86Starter === 'undefined') {{
+                    throw new Error("Engine unpacked, but the browser security policy blocked execution.");
+                }}
+                log("Engine loaded successfully!", "success");
+
+                log("Decoding WebAssembly module...");
                 const wasmBuf = decodeBase64("{wasm_b64}");
                 
                 log("Decoding BIOS and OS Disks (this may take a few seconds)...");
@@ -116,7 +116,7 @@ def main():
                             const {{ instance }} = await WebAssembly.instantiate(wasmBuf, imports);
                             return instance.exports;
                         }} catch (e) {{
-                            log("WASM Compilation blocked! Your Chromebook's security policy likely blocks 'unsafe-wasm-eval' for local files.", "error");
+                            log("WASM Compilation blocked by Chrome OS security policy.", "error");
                             throw e;
                         }}
                     }},
@@ -134,14 +134,13 @@ def main():
             }}
         }}
 
-        // Start after a tiny delay to allow the HTML/CSS to render first
         setTimeout(initVM, 150);
     </script>
 </body>
 </html>
 """
     
-    output = "linux_refined.html"
+    output = "linux_ghost.html"
     print(f"\n[*] Writing everything to {output}...")
     with open(output, "w", encoding="utf-8") as f:
         f.write(html_template)
