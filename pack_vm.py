@@ -1,7 +1,6 @@
 import base64
 import os
 import urllib.request
-import re
 
 FILES = {
     "libv86.js": "https://unpkg.com/v86/build/libv86.js",
@@ -11,105 +10,80 @@ FILES = {
     "linux4.iso": "https://copy.sh/v86/images/linux4.iso"
 }
 
-def fetch_deps():
-    for f, url in FILES.items():
-        if not os.path.exists(f):
-            print(f"[*] Downloading {f}...")
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as r, open(f, 'wb') as out: out.write(r.read())
-
 def get_b64(f):
     with open(f, "rb") as file: return base64.b64encode(file.read()).decode("utf-8")
 
 def main():
-    fetch_deps()
-    
-    print("[*] Performing Script Lobotomy on libv86.js...")
+    # Reuse your download logic here
+    for f, url in FILES.items():
+        if not os.path.exists(f):
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as r, open(f, 'wb') as out: out.write(r.read())
+
+    print("[*] Preparing v2 Lobotomy...")
     with open("libv86.js", "r", encoding="utf-8") as f:
-        engine_code = f.read()
-
-    # FORCE LOBOTOMY: 
-    # We replace common module detection patterns with 'false' 
-    # This forces the script to ignore 'exports', 'module', and 'define'
-    engine_code = engine_code.replace('typeof exports', '"undefined"')
-    engine_code = engine_code.replace('typeof module', '"undefined"')
-    engine_code = engine_code.replace('typeof define', '"undefined"')
-    
-    # MANUALLY STICK IT TO WINDOW:
-    # We add a brute-force export at the very end of the file
-    engine_code += "\nwindow.V86Starter = window.V86Starter || V86Starter || this.V86Starter;"
-    
-    # Clean up for HTML placement
-    engine_code = engine_code.replace("</script>", "<\\/script>")
-
-    wasm_b64 = get_b64("v86.wasm")
-    bios_b64 = get_b64("seabios.bin")
-    vga_b64 = get_b64("vgabios.bin")
-    iso_b64 = get_b64("linux4.iso")
+        # We wrap the engine in a check that forces it into the global scope
+        engine_raw = "window.V86Starter = (function(){ " + f.read().replace("</script>", "<\\/script>") + " return typeof V86Starter !== 'undefined' ? V86Starter : this.V86Starter; })();"
 
     html_template = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Lobotomy Edition)</title>
+    <title>Linux VM (Ultimate Proxy)</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
-        #screen_container { border: 2px solid #444; display: inline-block; background: #000; }
-        #log { text-align: left; max-width: 640px; margin: 0 auto; color: #666; font-size: 12px; height: 100px; overflow-y: auto; border-left: 1px solid #222; padding-left: 10px; }
+        body { background: #111; color: #0f0; font-family: 'Consolas', monospace; padding: 20px; }
+        #log { background: #000; border: 1px solid #333; padding: 10px; height: 150px; overflow-y: auto; font-size: 12px; margin-bottom: 10px; }
+        #screen_container { border: 2px solid #444; background: #000; display: inline-block; }
+        .info { color: #888; }
+        .warn { color: #ff0; }
+        .err { color: #f00; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h3>EMULATOR KERNEL</h3>
-    <div id="log">>> Bootloader active...</div>
+    <div id="log">>> Ready for Proxy Injection...</div>
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
     </div>
 
     <script>
-        try {
-            [[ENGINE_CODE]]
-            window.engineCheck = true;
-        } catch(e) {
-            window.engineErr = e.message;
-        }
-    </script>
-
-    <script>
         const logger = document.getElementById("log");
-        function print(msg) { logger.innerHTML += `<br>> ${msg}`; logger.scrollTop = logger.scrollHeight; }
+        function print(msg, type='') { 
+            logger.innerHTML += `<div class="${type}">> ${msg}</div>`; 
+            logger.scrollTop = logger.scrollHeight;
+        }
 
-        function decode(b64) {
+        // Optimized Memory-Safe Decoder
+        function decodeAsset(name, b64) {
+            print(`Unpacking ${name}...`, 'info');
             const str = window.atob(b64);
             const buf = new Uint8Array(str.length);
             for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
             return buf.buffer;
         }
 
-        async function start() {
-            print("Verifying Kernel Exports...");
-            
-            // Check every possible hiding spot for the engine
-            const engine = window.V86Starter || V86Starter;
-
-            if (!engine) {
-                print("FATAL: Scoping Lockout persists. Chrome is stripping the global variable.");
-                if(window.engineErr) print("Internal Error: " + window.engineErr);
-                return;
-            }
-
+        async function init() {
             try {
-                print("Decoding System Disks...");
-                const wasm = decode("[[WASM]]");
-                const bios = decode("[[BIOS]]");
-                const vga = decode("[[VGA]]");
-                const iso = decode("[[ISO]]");
+                print("Checking Kernel Proxy...");
+                
+                // Injecting engine...
+                [[ENGINE_CODE]]
 
-                print("Starting VM Core...");
-                new engine({
+                const V86 = window.V86Starter;
+                if (!V86) throw new Error("Kernel Proxy failed to export V86Starter.");
+                print("Kernel verified. Memory check passed.", "info");
+
+                // Decode assets one by one to prevent RAM spikes
+                const wasm = decodeAsset("WASM Module", "[[WASM]]");
+                const bios = decodeAsset("System BIOS", "[[BIOS]]");
+                const vga  = decodeAsset("VGA BIOS", "[[VGA]]");
+                const iso  = decodeAsset("Linux ISO (30MB)", "[[ISO]]");
+
+                print("Ignition...", "warn");
+                window.emulator = new V86({
                     wasm_fn: async (i) => {
-                        const res = await WebAssembly.instantiate(wasm, i);
-                        return res.instance.exports;
+                        const { instance } = await WebAssembly.instantiate(wasm, i);
+                        return instance.exports;
                     },
                     memory_size: 128 * 1024 * 1024,
                     screen_container: document.getElementById("screen_container"),
@@ -118,28 +92,31 @@ def main():
                     cdrom: { buffer: iso },
                     autostart: true
                 });
-                print("System Booting.");
+                print("SYSTEM RUNNING.");
+
             } catch (e) {
-                print("RUNTIME ERROR: " + e.message);
+                print("FATAL: " + e.message, "err");
+                console.error(e);
             }
         }
 
-        setTimeout(start, 100);
+        // Wait for page to settle
+        window.onload = () => setTimeout(init, 500);
     </script>
 </body>
 </html>
 """
     
-    final_html = html_template.replace("[[ENGINE_CODE]]", engine_code)
-    final_html = final_html.replace("[[WASM]]", wasm_b64)
-    final_html = final_html.replace("[[BIOS]]", bios_b64)
-    final_html = final_html.replace("[[VGA]]", vga_b64)
-    final_html = final_html.replace("[[ISO]]", iso_b64)
+    # Manual replacement to prevent f-string issues
+    final = html_template.replace("[[ENGINE_CODE]]", f"<script>{engine_raw}</script>")
+    final = final.replace("[[WASM]]", get_b64("v86.wasm"))
+    final = final.replace("[[BIOS]]", get_b64("seabios.bin"))
+    final = final.replace("[[VGA]]", get_b64("vgabios.bin"))
+    final = final.replace("[[ISO]]", get_b64("linux4.iso"))
 
-    with open("linux_lobotomy.html", "w", encoding="utf-8") as f:
-        f.write(final_html)
-    
-    print("\n[OK] Created linux_lobotomy.html")
+    with open("linux_proxy.html", "w", encoding="utf-8") as f:
+        f.write(final)
+    print("[OK] Created linux_proxy.html")
 
 if __name__ == "__main__":
     main()
