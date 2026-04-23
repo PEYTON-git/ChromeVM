@@ -23,92 +23,120 @@ def get_b64(f):
 def main():
     fetch_deps()
     
-    # We read the engine and escape it specifically for HTML placement
+    print("[*] Reading Engine (No interference)...")
     with open("libv86.js", "r", encoding="utf-8") as f:
-        # Escaping backslashes and script tags is vital for static embedding
-        engine_raw = f.read().replace("\\", "\\\\").replace("</script>", "<\\/script>")
+        # We ONLY escape the closing script tag. Nothing else.
+        engine_raw = f.read().replace("</script>", "<\\/script>")
 
     wasm_b64 = get_b64("v86.wasm")
     bios_b64 = get_b64("seabios.bin")
     vga_b64 = get_b64("vgabios.bin")
     iso_b64 = get_b64("linux4.iso")
 
-    html_template = f"""<!DOCTYPE html>
+    # We use a standard string template to avoid f-string brace corruption
+    html_template = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux Offline (Monolith)</title>
+    <title>Linux VM (Zero-Interference)</title>
     <style>
-        body {{ background: #000; color: #0f0; font-family: monospace; padding: 20px; }}
-        #screen_container {{ border: 1px solid #333; display: inline-block; }}
-        #log {{ color: #888; font-size: 12px; margin-bottom: 10px; }}
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
+        #screen_container { border: 2px solid #222; display: inline-block; margin-top: 20px; background: #000; }
+        #log { color: #555; font-size: 14px; text-align: left; max-width: 640px; margin: 0 auto; border-left: 2px solid #333; padding-left: 10px; }
+        .err { color: #f44; }
     </style>
 </head>
 <body>
-    <div id="log">System: Initializing...</div>
+    <h3>V86 OFFLINE BOOTSTRAP</h3>
+    <div id="log">System: Ready.</div>
+    
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
     </div>
 
-    <script>
-        try {{
-            {engine_raw}
+    <script type="text/javascript">
+        try {
+            [[ENGINE_CODE]]
             window.engineLoaded = true;
-        }} catch (e) {{
+        } catch (e) {
             window.engineError = e.message;
-        }}
+            window.engineStack = e.stack;
+        }
     </script>
 
     <script>
         const logger = document.getElementById("log");
-        function decode(b64) {{
+        function print(msg, isError = false) {
+            logger.innerHTML += `<br><span class="${isError ? 'err' : ''}">> ${msg}</span>`;
+        }
+
+        function decode(b64) {
             const str = window.atob(b64);
             const buf = new Uint8Array(str.length);
             for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
             return buf.buffer;
-        }}
+        }
 
-        async function boot() {{
-            if (!window.engineLoaded) {{
-                logger.innerHTML = "FATAL: Engine parse error: " + (window.engineError || "Unknown block");
+        async function boot() {
+            if (!window.engineLoaded) {
+                print("FATAL: Engine failed to parse.", true);
+                print("Error: " + (window.engineError || "Security Sandbox Active"), true);
                 return;
-            }}
+            }
 
-            try {{
-                logger.innerText = "Status: Decoding WASM...";
-                const wasm = decode("{wasm_b64}");
-                
-                logger.innerText = "Status: Decoding Disks...";
-                const bios = decode("{bios_b64}");
-                const vga = decode("{vga_b64}");
-                const iso = decode("{iso_b64}");
+            try {
+                print("Environment: WebAssembly check...");
+                if (typeof WebAssembly !== "object") throw new Error("WASM disabled.");
 
-                logger.innerText = "Status: Booting...";
-                new V86Starter({{
-                    wasm_fn: async (i) => {{
+                print("Storage: Decoding 32MB assets...");
+                const wasm = decode("[[WASM]]");
+                const bios = decode("[[BIOS]]");
+                const vga = decode("[[VGA]]");
+                const iso = decode("[[ISO]]");
+
+                print("Kernel: Starting emulator core...");
+                window.emulator = new V86Starter({
+                    wasm_fn: async (i) => {
                         const res = await WebAssembly.instantiate(wasm, i);
                         return res.instance.exports;
-                    }},
+                    },
                     memory_size: 128 * 1024 * 1024,
+                    vga_memory_size: 8 * 1024 * 1024,
                     screen_container: document.getElementById("screen_container"),
-                    bios: {{ buffer: bios }},
-                    vga_bios: {{ buffer: vga }},
-                    cdrom: {{ buffer: iso }},
+                    bios: { buffer: bios },
+                    vga_bios: { buffer: vga },
+                    cdrom: { buffer: iso },
                     autostart: true
-                }});
-                logger.style.display = "none";
-            }} catch (err) {{
-                logger.innerText = "Runtime Error: " + err.message;
-            }}
-        }}
+                });
+
+                print("Success: VM Running.");
+                logger.style.color = "#0a0";
+            } catch (err) {
+                print("RUNTIME ERROR: " + err.message, true);
+                console.error(err);
+            }
+        }
         
-        boot();
+        // Short delay to ensure DOM is fully painted
+        setTimeout(boot, 100);
     </script>
 </body>
 </html>
 """
-    with open("linux_monolith.html", "w", encoding="utf-8") as f: f.write(html_template)
-    print("[OK] Created linux_monolith.html")
+    
+    # Manually stitch the strings together to avoid any Python string formatting bugs
+    final_html = html_template.replace("[[ENGINE_CODE]]", engine_raw)
+    final_html = final_html.replace("[[WASM]]", wasm_b64)
+    final_html = final_html.replace("[[BIOS]]", bios_b64)
+    final_html = final_html.replace("[[VGA]]", vga_b64)
+    final_html = final_html.replace("[[ISO]]", iso_b64)
 
-main()
+    with open("linux_zero.html", "w", encoding="utf-8") as f:
+        f.write(final_html)
+    
+    print("\n[OK] Created linux_zero.html")
+    print("[*] Move this to your Downloads folder and try again.")
+
+if __name__ == "__main__":
+    main()
