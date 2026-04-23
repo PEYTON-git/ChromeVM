@@ -14,73 +14,71 @@ def get_b64(f):
     with open(f, "rb") as file: return base64.b64encode(file.read()).decode("utf-8")
 
 def main():
-    # Reuse your download logic here
     for f, url in FILES.items():
         if not os.path.exists(f):
+            print(f"[*] Downloading {f}...")
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as r, open(f, 'wb') as out: out.write(r.read())
 
-    print("[*] Preparing v2 Lobotomy...")
+    print("[*] Reading Engine...")
     with open("libv86.js", "r", encoding="utf-8") as f:
-        # We wrap the engine in a check that forces it into the global scope
-        engine_raw = "window.V86Starter = (function(){ " + f.read().replace("</script>", "<\\/script>") + " return typeof V86Starter !== 'undefined' ? V86Starter : this.V86Starter; })();"
+        # We ONLY escape the closing script tag. No other modifications.
+        engine_raw = f.read().replace("</script>", "<\\/script>")
+
+    wasm_b64 = get_b64("v86.wasm")
+    bios_b64 = get_b64("seabios.bin")
+    vga_b64 = get_b64("vgabios.bin")
+    iso_b64 = get_b64("linux4.iso")
 
     html_template = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Ultimate Proxy)</title>
+    <title>Linux VM (Linear)</title>
     <style>
-        body { background: #111; color: #0f0; font-family: 'Consolas', monospace; padding: 20px; }
-        #log { background: #000; border: 1px solid #333; padding: 10px; height: 150px; overflow-y: auto; font-size: 12px; margin-bottom: 10px; }
-        #screen_container { border: 2px solid #444; background: #000; display: inline-block; }
-        .info { color: #888; }
-        .warn { color: #ff0; }
-        .err { color: #f00; font-weight: bold; }
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
+        #screen_container { border: 1px solid #333; display: inline-block; background: #000; }
+        .status { color: #555; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <div id="log">>> Ready for Proxy Injection...</div>
+    <div id="status" class="status">System: Initializing Linear Boot...</div>
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
     </div>
 
     <script>
-        const logger = document.getElementById("log");
-        function print(msg, type='') { 
-            logger.innerHTML += `<div class="${type}">> ${msg}</div>`; 
-            logger.scrollTop = logger.scrollHeight;
-        }
+        [[ENGINE_RAW]]
+    </script>
 
-        // Optimized Memory-Safe Decoder
-        function decodeAsset(name, b64) {
-            print(`Unpacking ${name}...`, 'info');
+    <script>
+        const status = document.getElementById("status");
+        
+        function decode(b64) {
             const str = window.atob(b64);
             const buf = new Uint8Array(str.length);
             for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
             return buf.buffer;
         }
 
-        async function init() {
+        async function boot() {
             try {
-                print("Checking Kernel Proxy...");
+                status.innerText = "Status: Verifying V86Starter...";
+                if (typeof V86Starter === 'undefined') {
+                    throw new Error("Engine failed to register. The browser likely blocked the internal script.");
+                }
+
+                status.innerText = "Status: Decoding WASM...";
+                const wasm = decode("[[WASM]]");
                 
-                // Injecting engine...
-                [[ENGINE_CODE]]
+                status.innerText = "Status: Decoding BIOS/ISO (35MB)...";
+                const bios = decode("[[BIOS]]");
+                const vga = decode("[[VGA]]");
+                const iso = decode("[[ISO]]");
 
-                const V86 = window.V86Starter;
-                if (!V86) throw new Error("Kernel Proxy failed to export V86Starter.");
-                print("Kernel verified. Memory check passed.", "info");
-
-                // Decode assets one by one to prevent RAM spikes
-                const wasm = decodeAsset("WASM Module", "[[WASM]]");
-                const bios = decodeAsset("System BIOS", "[[BIOS]]");
-                const vga  = decodeAsset("VGA BIOS", "[[VGA]]");
-                const iso  = decodeAsset("Linux ISO (30MB)", "[[ISO]]");
-
-                print("Ignition...", "warn");
-                window.emulator = new V86({
+                status.innerText = "Status: Ignition...";
+                window.emulator = new V86Starter({
                     wasm_fn: async (i) => {
                         const { instance } = await WebAssembly.instantiate(wasm, i);
                         return instance.exports;
@@ -92,31 +90,32 @@ def main():
                     cdrom: { buffer: iso },
                     autostart: true
                 });
-                print("SYSTEM RUNNING.");
-
+                
+                status.style.display = "none";
             } catch (e) {
-                print("FATAL: " + e.message, "err");
+                status.style.color = "red";
+                status.innerText = "FATAL ERROR: " + e.message;
                 console.error(e);
             }
         }
 
-        // Wait for page to settle
-        window.onload = () => setTimeout(init, 500);
+        // Run immediately
+        boot();
     </script>
 </body>
 </html>
 """
     
-    # Manual replacement to prevent f-string issues
-    final = html_template.replace("[[ENGINE_CODE]]", f"<script>{engine_raw}</script>")
-    final = final.replace("[[WASM]]", get_b64("v86.wasm"))
-    final = final.replace("[[BIOS]]", get_b64("seabios.bin"))
-    final = final.replace("[[VGA]]", get_b64("vgabios.bin"))
-    final = final.replace("[[ISO]]", get_b64("linux4.iso"))
+    # Using replace instead of f-string to be safe
+    final = html_template.replace("[[ENGINE_RAW]]", engine_raw)
+    final = final.replace("[[WASM]]", wasm_b64)
+    final = final.replace("[[BIOS]]", bios_b64)
+    final = final.replace("[[VGA]]", vga_b64)
+    final = final.replace("[[ISO]]", iso_b64)
 
-    with open("linux_proxy.html", "w", encoding="utf-8") as f:
+    with open("linux_linear.html", "w", encoding="utf-8") as f:
         f.write(final)
-    print("[OK] Created linux_proxy.html")
+    print("[OK] Created linux_linear.html")
 
 if __name__ == "__main__":
     main()
