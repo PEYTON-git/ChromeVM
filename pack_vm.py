@@ -2,7 +2,6 @@ import base64
 import os
 import urllib.request
 
-# --- Configuration ---
 FILES = {
     "libv86.js": "https://unpkg.com/v86/build/libv86.js",
     "v86.wasm": "https://unpkg.com/v86/build/v86.wasm",
@@ -11,140 +10,105 @@ FILES = {
     "linux4.iso": "https://copy.sh/v86/images/linux4.iso"
 }
 
-def fetch_dependencies():
-    for filename, url in FILES.items():
-        if not os.path.exists(filename):
-            print(f"[*] Downloading {filename}...")
-            try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req) as response, open(filename, 'wb') as out_file:
-                    out_file.write(response.read())
-            except Exception as e:
-                pass
+def fetch_deps():
+    for f, url in FILES.items():
+        if not os.path.exists(f):
+            print(f"[*] Downloading {f}...")
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as r, open(f, 'wb') as out: out.write(r.read())
 
-def get_b64(filepath):
-    print(f"[*] Encoding {filepath} to Base64...")
-    with open(filepath, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+def get_b64(f):
+    with open(f, "rb") as file: return base64.b64encode(file.read()).decode("utf-8")
 
 def main():
-    print("--- Verifying Dependencies ---")
-    fetch_dependencies()
-    print("------------------------------\n")
-
-    print("[*] Packaging components...")
+    fetch_deps()
     
-    # Encode EVERYTHING, including the JS engine, to avoid HTML parser conflicts
-    engine_b64 = get_b64("libv86.js")
+    # We read the engine and escape it specifically for HTML placement
+    with open("libv86.js", "r", encoding="utf-8") as f:
+        # Escaping backslashes and script tags is vital for static embedding
+        engine_raw = f.read().replace("\\", "\\\\").replace("</script>", "<\\/script>")
+
     wasm_b64 = get_b64("v86.wasm")
     bios_b64 = get_b64("seabios.bin")
     vga_b64 = get_b64("vgabios.bin")
     iso_b64 = get_b64("linux4.iso")
 
     html_template = f"""<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Ghost Injection)</title>
+    <title>Linux Offline (Monolith)</title>
     <style>
-        body {{ background: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 2rem; margin: 0; }}
-        .container {{ background: #1e293b; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 800px; width: 100%; }}
-        #screen_container {{ background: #000; border: 2px solid #334155; border-radius: 0.25rem; min-width: 640px; min-height: 400px; display: flex; justify-content: center; align-items: center; overflow: hidden; margin-top: 1rem; position: relative; }}
-        #log {{ font-family: monospace; color: #38bdf8; margin-bottom: 1rem; padding: 0.75rem; background: #020617; border-radius: 0.25rem; white-space: pre-wrap; }}
-        .error {{ color: #ef4444 !important; font-weight: bold; }}
-        .success {{ color: #22c55e !important; }}
+        body {{ background: #000; color: #0f0; font-family: monospace; padding: 20px; }}
+        #screen_container {{ border: 1px solid #333; display: inline-block; }}
+        #log {{ color: #888; font-size: 12px; margin-bottom: 10px; }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2 style="margin-top:0;">Offline Linux Environment</h2>
-        <div id="log">Initializing diagnostics...</div>
-        <div id="screen_container">
-            <div style="white-space: pre; font: 14px monospace; line-height: 14px; position: absolute; top: 5px; left: 5px;"></div>
-            <canvas style="display:none"></canvas>
-        </div>
+    <div id="log">System: Initializing...</div>
+    <div id="screen_container">
+        <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
+        <canvas style="display:none"></canvas>
     </div>
 
     <script>
-        const logEl = document.getElementById('log');
-        const log = (msg, type = '') => {{
-            logEl.innerHTML += `<br><span class="${{type}}">> ${{msg}}</span>`;
-            logEl.scrollTop = logEl.scrollHeight;
-        }};
+        try {{
+            {engine_raw}
+            window.engineLoaded = true;
+        }} catch (e) {{
+            window.engineError = e.message;
+        }}
+    </script>
 
-        function decodeBase64(b64) {{
-            const binString = window.atob(b64);
-            const len = binString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {{
-                bytes[i] = binString.charCodeAt(i);
-            }}
-            return bytes.buffer;
+    <script>
+        const logger = document.getElementById("log");
+        function decode(b64) {{
+            const str = window.atob(b64);
+            const buf = new Uint8Array(str.length);
+            for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
+            return buf.buffer;
         }}
 
-        async function initVM() {{
+        async function boot() {{
+            if (!window.engineLoaded) {{
+                logger.innerHTML = "FATAL: Engine parse error: " + (window.engineError || "Unknown block");
+                return;
+            }}
+
             try {{
-                log("Unpacking JavaScript Engine...");
+                logger.innerText = "Status: Decoding WASM...";
+                const wasm = decode("{wasm_b64}");
                 
-                // Decode the engine Base64 into raw text to bypass the HTML parser
-                const engineBytes = new Uint8Array(decodeBase64("{engine_b64}"));
-                const engineCode = new TextDecoder('utf-8').decode(engineBytes);
-                
-                // Inject directly into the DOM
-                const script = document.createElement('script');
-                script.text = engineCode;
-                document.body.appendChild(script);
+                logger.innerText = "Status: Decoding Disks...";
+                const bios = decode("{bios_b64}");
+                const vga = decode("{vga_b64}");
+                const iso = decode("{iso_b64}");
 
-                if (typeof V86Starter === 'undefined') {{
-                    throw new Error("Engine unpacked, but the browser security policy blocked execution.");
-                }}
-                log("Engine loaded successfully!", "success");
-
-                log("Decoding WebAssembly module...");
-                const wasmBuf = decodeBase64("{wasm_b64}");
-                
-                log("Decoding BIOS and OS Disks (this may take a few seconds)...");
-                const biosBuf = decodeBase64("{bios_b64}");
-                const vgaBuf = decodeBase64("{vga_b64}");
-                const isoBuf = decodeBase64("{iso_b64}");
-
-                log("Booting Virtual Machine...", "success");
-                
-                const emulator = new V86Starter({{
-                    wasm_fn: async (imports) => {{
-                        try {{
-                            const {{ instance }} = await WebAssembly.instantiate(wasmBuf, imports);
-                            return instance.exports;
-                        }} catch (e) {{
-                            log("WASM Compilation blocked by Chrome OS security policy.", "error");
-                            throw e;
-                        }}
+                logger.innerText = "Status: Booting...";
+                new V86Starter({{
+                    wasm_fn: async (i) => {{
+                        const res = await WebAssembly.instantiate(wasm, i);
+                        return res.instance.exports;
                     }},
                     memory_size: 128 * 1024 * 1024,
-                    vga_memory_size: 8 * 1024 * 1024,
                     screen_container: document.getElementById("screen_container"),
-                    bios: {{ buffer: biosBuf }},
-                    vga_bios: {{ buffer: vgaBuf }},
-                    cdrom: {{ buffer: isoBuf }},
+                    bios: {{ buffer: bios }},
+                    vga_bios: {{ buffer: vga }},
+                    cdrom: {{ buffer: iso }},
                     autostart: true
                 }});
-
+                logger.style.display = "none";
             }} catch (err) {{
-                log("FATAL ERROR: " + err.message, "error");
+                logger.innerText = "Runtime Error: " + err.message;
             }}
         }}
-
-        setTimeout(initVM, 150);
+        
+        boot();
     </script>
 </body>
 </html>
 """
-    
-    output = "linux_ghost.html"
-    print(f"\n[*] Writing everything to {output}...")
-    with open(output, "w", encoding="utf-8") as f:
-        f.write(html_template)
-    print(f"[OK] Done! Move {output} to your local Downloads folder and run it.")
+    with open("linux_monolith.html", "w", encoding="utf-8") as f: f.write(html_template)
+    print("[OK] Created linux_monolith.html")
 
-if __name__ == "__main__":
-    main()
+main()
