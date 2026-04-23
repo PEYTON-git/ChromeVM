@@ -23,120 +23,114 @@ def get_b64(f):
 def main():
     fetch_deps()
     
-    print("[*] Reading Engine (No interference)...")
-    with open("libv86.js", "r", encoding="utf-8") as f:
-        # We ONLY escape the closing script tag. Nothing else.
-        engine_raw = f.read().replace("</script>", "<\\/script>")
-
+    # We encode the engine itself as Base64 to keep it safe from the HTML parser
+    engine_b64 = get_b64("libv86.js")
     wasm_b64 = get_b64("v86.wasm")
     bios_b64 = get_b64("seabios.bin")
     vga_b64 = get_b64("vgabios.bin")
     iso_b64 = get_b64("linux4.iso")
 
-    # We use a standard string template to avoid f-string brace corruption
     html_template = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Zero-Interference)</title>
+    <title>Linux VM (Blob-Injection)</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
-        #screen_container { border: 2px solid #222; display: inline-block; margin-top: 20px; background: #000; }
-        #log { color: #555; font-size: 14px; text-align: left; max-width: 640px; margin: 0 auto; border-left: 2px solid #333; padding-left: 10px; }
-        .err { color: #f44; }
+        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; padding: 20px; }
+        #screen_container { border: 2px solid #333; display: inline-block; background: #000; margin-top: 10px; }
+        #log { color: #008f11; font-size: 13px; margin-bottom: 10px; border-left: 2px solid #008f11; padding-left: 10px; height: 120px; overflow-y: auto; }
+        .err { color: #ff3e3e; }
     </style>
 </head>
 <body>
-    <h3>V86 OFFLINE BOOTSTRAP</h3>
-    <div id="log">System: Ready.</div>
-    
+    <div id="log">>> Terminal Initialized...</div>
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
     </div>
 
-    <script type="text/javascript">
-        try {
-            [[ENGINE_CODE]]
-            window.engineLoaded = true;
-        } catch (e) {
-            window.engineError = e.message;
-            window.engineStack = e.stack;
-        }
-    </script>
-
     <script>
         const logger = document.getElementById("log");
         function print(msg, isError = false) {
-            logger.innerHTML += `<br><span class="${isError ? 'err' : ''}">> ${msg}</span>`;
+            logger.innerHTML += `<br><span class="${isError ? 'err' : ''}">[${new Date().toLocaleTimeString()}] ${msg}</span>`;
+            logger.scrollTop = logger.scrollHeight;
         }
 
-        function decode(b64) {
+        // Convert Base64 to a Blob and create a virtual URL for it
+        function createBlobUrl(b64, type) {
             const str = window.atob(b64);
             const buf = new Uint8Array(str.length);
             for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
-            return buf.buffer;
+            const blob = new Blob([buf], { type: type });
+            return URL.createObjectURL(blob);
         }
 
-        async function boot() {
-            if (!window.engineLoaded) {
-                print("FATAL: Engine failed to parse.", true);
-                print("Error: " + (window.engineError || "Security Sandbox Active"), true);
-                return;
-            }
-
+        async function start() {
             try {
-                print("Environment: WebAssembly check...");
-                if (typeof WebAssembly !== "object") throw new Error("WASM disabled.");
+                print("Step 1: Injecting Virtual Engine...");
+                const engineUrl = createBlobUrl("[[ENGINE_B64]]", "text/javascript");
+                
+                // We create a real script tag pointing to our virtual file
+                const script = document.createElement("script");
+                script.src = engineUrl;
+                
+                script.onload = async () => {
+                    print("Step 2: Engine script verified.");
+                    
+                    if (typeof V86Starter === "undefined") {
+                        print("CRITICAL: V86Starter still not found in global scope. Attempting manual fix...", true);
+                        // Sometimes browsers hide it; we can try to find it in the window
+                        if (window.V86Starter) { print("Manual fix: Found in window."); }
+                        else { throw new Error("Engine loaded but failed to export V86Starter."); }
+                    }
 
-                print("Storage: Decoding 32MB assets...");
-                const wasm = decode("[[WASM]]");
-                const bios = decode("[[BIOS]]");
-                const vga = decode("[[VGA]]");
-                const iso = decode("[[ISO]]");
+                    print("Step 3: Decoding Virtual Disks...");
+                    const wasmBuf = await (await fetch(createBlobUrl("[[WASM]]", "application/wasm"))).arrayBuffer();
+                    const biosBuf = await (await fetch(createBlobUrl("[[BIOS]]", "application/octet-stream"))).arrayBuffer();
+                    const vgaBuf = await (await fetch(createBlobUrl("[[VGA]]", "application/octet-stream"))).arrayBuffer();
+                    const isoBuf = await (await fetch(createBlobUrl("[[ISO]]", "application/octet-stream"))).arrayBuffer();
 
-                print("Kernel: Starting emulator core...");
-                window.emulator = new V86Starter({
-                    wasm_fn: async (i) => {
-                        const res = await WebAssembly.instantiate(wasm, i);
-                        return res.instance.exports;
-                    },
-                    memory_size: 128 * 1024 * 1024,
-                    vga_memory_size: 8 * 1024 * 1024,
-                    screen_container: document.getElementById("screen_container"),
-                    bios: { buffer: bios },
-                    vga_bios: { buffer: vga },
-                    cdrom: { buffer: iso },
-                    autostart: true
-                });
+                    print("Step 4: Launching Kernel...");
+                    window.emulator = new V86Starter({
+                        wasm_fn: async (i) => {
+                            const res = await WebAssembly.instantiate(wasmBuf, i);
+                            return res.instance.exports;
+                        },
+                        memory_size: 128 * 1024 * 1024,
+                        screen_container: document.getElementById("screen_container"),
+                        bios: { buffer: biosBuf },
+                        vga_bios: { buffer: vgaBuf },
+                        cdrom: { buffer: isoBuf },
+                        autostart: true
+                    });
+                    print("SUCCESS: VM is running.");
+                };
 
-                print("Success: VM Running.");
-                logger.style.color = "#0a0";
-            } catch (err) {
-                print("RUNTIME ERROR: " + err.message, true);
-                console.error(err);
+                script.onerror = () => { throw new Error("Virtual script injection failed."); };
+                document.body.appendChild(script);
+
+            } catch (e) {
+                print("FATAL ERROR: " + e.message, true);
             }
         }
-        
-        // Short delay to ensure DOM is fully painted
-        setTimeout(boot, 100);
+
+        start();
     </script>
 </body>
 </html>
 """
     
-    # Manually stitch the strings together to avoid any Python string formatting bugs
-    final_html = html_template.replace("[[ENGINE_CODE]]", engine_raw)
+    # Manual stitching
+    final_html = html_template.replace("[[ENGINE_B64]]", engine_b64)
     final_html = final_html.replace("[[WASM]]", wasm_b64)
     final_html = final_html.replace("[[BIOS]]", bios_b64)
     final_html = final_html.replace("[[VGA]]", vga_b64)
     final_html = final_html.replace("[[ISO]]", iso_b64)
 
-    with open("linux_zero.html", "w", encoding="utf-8") as f:
+    with open("linux_blob.html", "w", encoding="utf-8") as f:
         f.write(final_html)
     
-    print("\n[OK] Created linux_zero.html")
-    print("[*] Move this to your Downloads folder and try again.")
+    print("\n[OK] Created linux_blob.html")
 
 if __name__ == "__main__":
     main()
