@@ -1,6 +1,7 @@
 import base64
 import os
 import urllib.request
+import re
 
 FILES = {
     "libv86.js": "https://unpkg.com/v86/build/libv86.js",
@@ -23,11 +24,23 @@ def get_b64(f):
 def main():
     fetch_deps()
     
-    # We read the engine and PREPEND the environment shield
+    print("[*] Performing Script Lobotomy on libv86.js...")
     with open("libv86.js", "r", encoding="utf-8") as f:
-        # This wrapper forces the engine to ignore any school-filter 'module' or 'define' variables
-        shield_prefix = "var module=undefined;var exports=undefined;var define=undefined;"
-        engine_raw = shield_prefix + f.read().replace("</script>", "<\\/script>")
+        engine_code = f.read()
+
+    # FORCE LOBOTOMY: 
+    # We replace common module detection patterns with 'false' 
+    # This forces the script to ignore 'exports', 'module', and 'define'
+    engine_code = engine_code.replace('typeof exports', '"undefined"')
+    engine_code = engine_code.replace('typeof module', '"undefined"')
+    engine_code = engine_code.replace('typeof define', '"undefined"')
+    
+    # MANUALLY STICK IT TO WINDOW:
+    # We add a brute-force export at the very end of the file
+    engine_code += "\nwindow.V86Starter = window.V86Starter || V86Starter || this.V86Starter;"
+    
+    # Clean up for HTML placement
+    engine_code = engine_code.replace("</script>", "<\\/script>")
 
     wasm_b64 = get_b64("v86.wasm")
     bios_b64 = get_b64("seabios.bin")
@@ -38,16 +51,16 @@ def main():
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Environment Shield)</title>
+    <title>Linux VM (Lobotomy Edition)</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
-        #screen_container { border: 1px solid #333; background: #000; display: inline-block; }
-        #log { font-size: 12px; color: #0a0; border-bottom: 1px solid #222; padding-bottom: 10px; margin-bottom: 10px; height: 150px; overflow-y: auto; }
-        .err { color: #f55; font-weight: bold; }
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
+        #screen_container { border: 2px solid #444; display: inline-block; background: #000; }
+        #log { text-align: left; max-width: 640px; margin: 0 auto; color: #666; font-size: 12px; height: 100px; overflow-y: auto; border-left: 1px solid #222; padding-left: 10px; }
     </style>
 </head>
 <body>
-    <div id="log">>> Shielding Environment...</div>
+    <h3>EMULATOR KERNEL</h3>
+    <div id="log">>> Bootloader active...</div>
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
@@ -55,29 +68,16 @@ def main():
 
     <script>
         try {
-            // Self-Executing clean room
-            (function() {
-                var module = undefined;
-                var exports = undefined;
-                var define = undefined;
-                [[ENGINE_CODE]]
-                // Force a manual global assignment just in case
-                if (typeof V86Starter !== 'undefined') {
-                    window.V86Starter = V86Starter;
-                }
-            })();
-            window.engineLoaded = true;
-        } catch (e) {
-            window.engineError = e.message;
+            [[ENGINE_CODE]]
+            window.engineCheck = true;
+        } catch(e) {
+            window.engineErr = e.message;
         }
     </script>
 
     <script>
         const logger = document.getElementById("log");
-        function print(msg, isErr=false) {
-            logger.innerHTML += `<br><span class="${isErr?'err':''}">> ${msg}</span>`;
-            logger.scrollTop = logger.scrollHeight;
-        }
+        function print(msg) { logger.innerHTML += `<br>> ${msg}`; logger.scrollTop = logger.scrollHeight; }
 
         function decode(b64) {
             const str = window.atob(b64);
@@ -86,22 +86,27 @@ def main():
             return buf.buffer;
         }
 
-        async function boot() {
-            print("Step 1: Verifying Shielded Engine...");
-            if (!window.V86Starter) {
-                print("FAILED: V86Starter is still hiding. Error: " + (window.engineError || "Scoping Lockout"), true);
+        async function start() {
+            print("Verifying Kernel Exports...");
+            
+            // Check every possible hiding spot for the engine
+            const engine = window.V86Starter || V86Starter;
+
+            if (!engine) {
+                print("FATAL: Scoping Lockout persists. Chrome is stripping the global variable.");
+                if(window.engineErr) print("Internal Error: " + window.engineErr);
                 return;
             }
 
             try {
-                print("Step 2: Unpacking VM Assets...");
+                print("Decoding System Disks...");
                 const wasm = decode("[[WASM]]");
                 const bios = decode("[[BIOS]]");
                 const vga = decode("[[VGA]]");
                 const iso = decode("[[ISO]]");
 
-                print("Step 3: Initializing Emulator...");
-                new V86Starter({
+                print("Starting VM Core...");
+                new engine({
                     wasm_fn: async (i) => {
                         const res = await WebAssembly.instantiate(wasm, i);
                         return res.instance.exports;
@@ -113,28 +118,28 @@ def main():
                     cdrom: { buffer: iso },
                     autostart: true
                 });
-                print("Step 4: Boot Sequence Initiated.");
-            } catch (err) {
-                print("RUNTIME ERROR: " + err.message, true);
+                print("System Booting.");
+            } catch (e) {
+                print("RUNTIME ERROR: " + e.message);
             }
         }
 
-        setTimeout(boot, 200);
+        setTimeout(start, 100);
     </script>
 </body>
 </html>
 """
     
-    final_html = html_template.replace("[[ENGINE_CODE]]", engine_raw)
+    final_html = html_template.replace("[[ENGINE_CODE]]", engine_code)
     final_html = final_html.replace("[[WASM]]", wasm_b64)
     final_html = final_html.replace("[[BIOS]]", bios_b64)
     final_html = final_html.replace("[[VGA]]", vga_b64)
     final_html = final_html.replace("[[ISO]]", iso_b64)
 
-    with open("linux_shield.html", "w", encoding="utf-8") as f:
+    with open("linux_lobotomy.html", "w", encoding="utf-8") as f:
         f.write(final_html)
     
-    print("\n[OK] Created linux_shield.html")
+    print("\n[OK] Created linux_lobotomy.html")
 
 if __name__ == "__main__":
     main()
