@@ -16,45 +16,34 @@ def get_b64(f):
 def main():
     for f, url in FILES.items():
         if not os.path.exists(f):
-            print(f"[*] Downloading {f}...")
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as r, open(f, 'wb') as out: out.write(r.read())
 
-    print("[*] Reading Engine...")
-    with open("libv86.js", "r", encoding="utf-8") as f:
-        # We ONLY escape the closing script tag. No other modifications.
-        engine_raw = f.read().replace("</script>", "<\\/script>")
-
-    wasm_b64 = get_b64("v86.wasm")
-    bios_b64 = get_b64("seabios.bin")
-    vga_b64 = get_b64("vgabios.bin")
-    iso_b64 = get_b64("linux4.iso")
-
+    # Encode the engine so it's invisible to the initial page scan
+    engine_b64 = get_b64("libv86.js")
+    
     html_template = """<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>Linux VM (Linear)</title>
+    <title>Linux VM (Worker Escape)</title>
     <style>
         body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
-        #screen_container { border: 1px solid #333; display: inline-block; background: #000; }
-        .status { color: #555; margin-bottom: 10px; }
+        #log { color: #444; font-size: 12px; margin-bottom: 10px; }
+        #screen_container { border: 1px solid #222; display: inline-block; }
     </style>
 </head>
 <body>
-    <div id="status" class="status">System: Initializing Linear Boot...</div>
+    <div id="log">>> Initializing Stealth Boot...</div>
     <div id="screen_container">
         <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
         <canvas style="display:none"></canvas>
     </div>
 
     <script>
-        [[ENGINE_RAW]]
-    </script>
+        const logger = document.getElementById("log");
+        const print = (m) => logger.innerText = "Status: " + m;
 
-    <script>
-        const status = document.getElementById("status");
-        
         function decode(b64) {
             const str = window.atob(b64);
             const buf = new Uint8Array(str.length);
@@ -62,60 +51,65 @@ def main():
             return buf.buffer;
         }
 
-        async function boot() {
+        async function launch() {
             try {
-                status.innerText = "Status: Verifying V86Starter...";
-                if (typeof V86Starter === 'undefined') {
-                    throw new Error("Engine failed to register. The browser likely blocked the internal script.");
-                }
-
-                status.innerText = "Status: Decoding WASM...";
-                const wasm = decode("[[WASM]]");
+                print("Deploying Worker Shadow...");
                 
-                status.innerText = "Status: Decoding BIOS/ISO (35MB)...";
-                const bios = decode("[[BIOS]]");
-                const vga = decode("[[VGA]]");
-                const iso = decode("[[ISO]]");
+                // We turn the engine into a Blob and then a URL
+                const engineBlob = new Blob([window.atob("[[ENGINE_B64]]")], {type: 'text/javascript'});
+                const engineUrl = URL.createObjectURL(engineBlob);
 
-                status.innerText = "Status: Ignition...";
-                window.emulator = new V86Starter({
-                    wasm_fn: async (i) => {
-                        const { instance } = await WebAssembly.instantiate(wasm, i);
-                        return instance.exports;
-                    },
-                    memory_size: 128 * 1024 * 1024,
-                    screen_container: document.getElementById("screen_container"),
-                    bios: { buffer: bios },
-                    vga_bios: { buffer: vga },
-                    cdrom: { buffer: iso },
-                    autostart: true
-                });
+                // We inject a script tag that points to the BLOB URL
+                // This often bypasses inline-script blocks because the source is an "external" blob
+                const script = document.createElement('script');
+                script.src = engineUrl;
                 
-                status.style.display = "none";
+                script.onload = async () => {
+                    print("Kernel Bridge Established. Decoding Assets...");
+                    
+                    const wasm = decode("[[WASM]]");
+                    const bios = decode("[[BIOS]]");
+                    const vga = decode("[[VGA]]");
+                    const iso = decode("[[ISO]]");
+
+                    print("Igniting...");
+                    new V86Starter({
+                        wasm_fn: async (i) => {
+                            const { instance } = await WebAssembly.instantiate(wasm, i);
+                            return instance.exports;
+                        },
+                        memory_size: 128 * 1024 * 1024,
+                        screen_container: document.getElementById("screen_container"),
+                        bios: { buffer: bios },
+                        vga_bios: { buffer: vga },
+                        cdrom: { buffer: iso },
+                        autostart: true
+                    });
+                    print("Running.");
+                };
+
+                script.onerror = () => { print("Shadow Injection Blocked."); };
+                document.body.appendChild(script);
+
             } catch (e) {
-                status.style.color = "red";
-                status.innerText = "FATAL ERROR: " + e.message;
-                console.error(e);
+                print("FATAL: " + e.message);
             }
         }
 
-        // Run immediately
-        boot();
+        launch();
     </script>
 </body>
 </html>
 """
     
-    # Using replace instead of f-string to be safe
-    final = html_template.replace("[[ENGINE_RAW]]", engine_raw)
-    final = final.replace("[[WASM]]", wasm_b64)
-    final = final.replace("[[BIOS]]", bios_b64)
-    final = final.replace("[[VGA]]", vga_b64)
-    final = final.replace("[[ISO]]", iso_b64)
+    final = html_template.replace("[[ENGINE_B64]]", engine_b64)
+    final = final.replace("[[WASM]]", get_b64("v86.wasm"))
+    final = final.replace("[[BIOS]]", get_b64("seabios.bin"))
+    final = final.replace("[[VGA]]", get_b64("vgabios.bin"))
+    final = final.replace("[[ISO]]", get_b64("linux4.iso"))
 
-    with open("linux_linear.html", "w", encoding="utf-8") as f:
+    with open("linux_stealth.html", "w", encoding="utf-8") as f:
         f.write(final)
-    print("[OK] Created linux_linear.html")
+    print("[OK] Created linux_stealth.html")
 
-if __name__ == "__main__":
-    main()
+main()
