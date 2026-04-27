@@ -1,134 +1,96 @@
 import base64, urllib.request, ssl, os
 
+# V86 Engine and a tiny Linux 3 ISO
 V86_JS = "https://copy.sh/v86/build/libv86.js"
 LINUX_IMG = "https://copy.sh/v86/images/linux3.iso"
 
 def get_b64(url):
-    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    print(f"[*] Fetching: {url}")
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, context=ctx) as r:
-        return base64.b64encode(r.read()).decode('utf-8')
+    
+    try:
+        with urllib.request.urlopen(req, context=ctx) as r:
+            data = r.read()
+            print(f"[+] Encoded {len(data)} bytes.")
+            return base64.b64encode(data).decode('utf-8')
+    except Exception as e:
+        print(f"[!] FAILED: {e}")
+        return None
 
-print("[*] Building High-Readability Version...")
-v86_data = get_b64(V86_JS)
-krn_data = get_b64(LINUX_IMG)
+def build():
+    print("[*] Assembling ChromeVM...")
+    v86_data = get_b64(V86_JS)
+    krn_data = get_b64(LINUX_IMG)
 
-html = f"""<!DOCTYPE html>
-<html>
+    if not v86_data or not krn_data:
+        print("[!] Aborting due to download failure.")
+        return
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>ChromeVM 2.0 | Terminal</title>
+    <title>ChromeVM | Terminal</title>
     <style>
-        :root {{
-            --bg-color: #1e1e1e;
-            --text-color: #d4d4d4;
-            --accent-color: #4ec9b0;
-            --cursor-color: #aeafad;
-        }}
+        :root {{ --bg: #1e1e1e; --fg: #d4d4d4; }}
         body {{ 
-            background: var(--bg-color); 
-            color: var(--text-color); 
-            font-family: 'Cascadia Code', 'Source Code Pro', 'Courier New', monospace; 
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
+            background: var(--bg); color: var(--fg); 
+            font-family: 'Courier New', monospace; 
+            margin: 0; display: flex; flex-direction: column; height: 100vh; 
         }}
-        #header {{
-            background: #252526;
-            padding: 8px 15px;
-            font-size: 12px;
-            color: #858585;
-            border-bottom: 1px solid #333;
-            display: flex;
-            justify-content: space-between;
+        #header {{ 
+            background: #252526; padding: 10px; font-size: 12px; 
+            color: #858585; border-bottom: 1px solid #333; 
         }}
-        #terminal-container {{
-            flex: 1;
-            padding: 15px;
-            overflow-y: auto;
-            cursor: text;
+        #terminal-container {{ 
+            flex: 1; padding: 10px; overflow: auto; background: #000; 
         }}
-        #terminal {{ 
-            white-space: pre-wrap; 
-            word-break: break-all; 
-            font-size: 15px; 
-            line-height: 1.4;
-            letter-spacing: 0.5px;
-        }}
-        .cursor {{
-            display: inline-block;
-            width: 8px;
-            height: 18px;
-            background: var(--cursor-color);
-            vertical-align: middle;
-            animation: blink 1s step-end infinite;
-        }}
-        @keyframes blink {{
-            50% {{ opacity: 0; }}
-        }}
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {{ width: 10px; }}
-        ::-webkit-scrollbar-track {{ background: #1e1e1e; }}
-        ::-webkit-scrollbar-thumb {{ background: #333; border-radius: 5px; }}
-        ::-webkit-scrollbar-thumb:hover {{ background: #444; }}
+        /* v86's screen engine will inject its pre tag here */
+        #screen_container {{ font-size: 14px; line-height: 1.2; outline: none; }}
     </style>
 </head>
 <body>
-    <div id="header">
-        <span>root@chromevm:~</span>
-        <span>V86_EMULATOR_ACTIVE</span>
-    </div>
-    <div id="terminal-container" onclick="document.body.focus()">
-        <div id="terminal">Booting Linux kernel...</div><span class="cursor"></span>
+    <div id="header">root@chromevm:~ | V86_EMULATOR_ACTIVE</div>
+    <div id="terminal-container" onclick="document.getElementById('screen_container').focus()">
+        <div id="screen_container" tabindex="0"></div>
     </div>
 
     <script>
-        const v86_bin = atob("{v86_data}");
-        const krn_bin = atob("{krn_data}");
+        // 1. Inject the v86 Emulator Engine cleanly
+        const s = document.createElement('script');
+        s.text = atob("{v86_data}");
+        document.head.appendChild(s);
 
-        function toBuf(b64) {{
-            const str = atob(b64);
-            const buf = new Uint8Array(str.length);
-            for(let i=0; i<str.length; i++) buf[i] = str.charCodeAt(i);
+        // 2. Decode Base64 to ArrayBuffer safely (Fixed bug here)
+        function b64ToBuffer(b64) {{
+            const bin = atob(b64);
+            const buf = new Uint8Array(bin.length);
+            for(let i=0; i<bin.length; i++) buf[i] = bin.charCodeAt(i);
             return buf.buffer;
         }}
 
-        const s = document.createElement('script');
-        s.text = v86_bin;
-        document.head.appendChild(s);
-
+        // 3. Boot VM
         window.onload = () => {{
-            const term = document.getElementById("terminal");
-            const container = document.getElementById("terminal-container");
-            
             const emulator = new V86Starter({{
-                bzimage: {{ buffer: toBuf("{krn_data}") }},
+                screen_container: document.getElementById("screen_container"),
+                // Fixed bug: Using 'cdrom' instead of 'bzimage' for an ISO file
+                cdrom: {{ buffer: b64ToBuffer("{krn_data}") }},
                 autostart: true,
                 memory_size: 32 * 1024 * 1024,
-                vga_enabled: false,
-            }});
-
-            emulator.add_listener("serial0-output-char", (char) => {{
-                if (term.innerText.includes("Booting Linux kernel...")) term.innerText = "";
-                term.innerText += char;
-                container.scrollTop = container.scrollHeight;
-            }});
-
-            window.addEventListener("keypress", (e) => {{
-                emulator.serial0_send(String.fromCharCode(e.which));
-            }});
-            
-            // Special keys (Backspace, Enter)
-            window.addEventListener("keydown", (e) => {{
-                if(e.keyCode === 8) emulator.serial0_send(String.fromCharCode(127)); // Backspace
-                if(e.keyCode === 13) emulator.serial0_send(String.fromCharCode(13)); // Enter
+                // Fixed bug: Restored VGA so the ISO can draw its bootloader text
+                vga_enabled: true 
             }});
         }};
     </script>
 </body>
 </html>"""
 
-with open("linux_pro.html", "w") as f: f.write(html)
-print("[SUCCESS] Created 'linux_pro.html' - High Readability Version")
+    with open("linux_final.html", "w") as f:
+        f.write(html)
+    print("\n[SUCCESS] Created 'linux_final.html'!")
+
+if __name__ == "__main__":
+    build()
